@@ -1,0 +1,380 @@
+<script src="three.r57.js"></script>
+<script src="three.TrackballControls.js"></script>
+<script src="stats.min.js"></script>
+<script src="Detector.js"></script>
+<script src="jquery-1.9.1.js"></script>
+
+<!--
+var sphere = new THREE.Mesh(new THREE.SphereGeometry(200, 50, 50), new THREE.MeshLambertMaterial({
+			color: 0x0000ff
+		}));
+		sphere.overdraw = true;
+		scene.add(sphere);
+-->
+
+<style>
+	body {
+		margin: 0;
+
+		font-family: Arial;
+	}
+
+	input {
+		margin: 0;
+		border: 0;
+	}
+
+	#panel {
+		position: absolute;
+		top: 10px; right: 10px;
+		z-index: 200;
+		opacity: 0.3;
+
+		width: 300px;
+
+		background: rgba(0, 0, 0, 0.4);
+	}
+		#panel:hover {
+			opacity: 1;
+		}
+		#panel > div {
+			margin: 5px;
+			padding: 5px 10px;
+
+			background: #333;
+
+			color: #EEE;
+		}
+
+		#panel .display {
+			margin-bottom: 10px;
+		}
+			#panel .display > h3 {
+				margin: 0.2em 0;
+				
+				font-size: 10pt;
+			}
+			#panel .display > table {
+				width: 100%;
+			}
+				#panel .display > table input {
+					width: 100%;
+
+					font-family: monospace;
+				}
+
+				#panel .display > table .suffix {
+					padding: 0 10px;
+
+					color: #FFF;
+					font-size: 10pt;
+					text-align: center;
+					white-space: nowrap;
+				}
+</style>
+
+<script id="tpl_display" type="text/template">
+	<article class="display">
+			<h3>Title</h3>
+
+			<table>
+				<tr>
+					<td width="100%">
+						<input />
+					</td>
+					<td class="suffix">
+						<span>suffix</span>
+					</td>
+				</tr>
+			</table>
+		</article>
+</script>
+
+<script id="tpl_boton" type="text/template">
+	<article class="boton">
+		<button>Accion</button>
+	</article>
+</script>
+
+<div id="panel">
+	<div>
+		
+	</div>
+</div>
+
+<script>
+	// Constantes
+
+	Math.TAU = 2 * Math.PI;
+	var AXIS_LENGTH = 250;
+	var PARTICLE_RADIUS = 10;
+	var CALCULO = {
+		velocidad: 10000000	,	// m * s^-1
+		angulo: 10,				// deg
+		radio: 0.01,			// m
+		tiempo: 0.05,			// s
+		carga: 1.6e-12,			// Coulomb
+		masa: 3.6436e-30		// kg
+	};
+	// Escalas de posicion
+	var X_SCALE = 1e4;
+	var Y_SCALE = 50;
+	var Z_SCALE = 1e4;
+
+	// Variables
+
+	// Variables - DOM
+	var container, panel;
+	// Variables - DOM - Displays
+	var disp_altura, disp_campo, disp_fact_t, disp_fact_x, disp_fact_y,
+		disp_fact_z, disp_freq_cicl, disp_n_vueltas, disp_paso,
+		disp_periodo, disp_radio, disp_tiempo, disp_vueltas;
+	// Variables - DOM - Botones
+	
+	// Variables - Three.JS
+	var scene, camera, controls, renderer;
+	// Variables - Debug
+	var stats;
+	// Variables - Objetos
+	var particle;
+	// Variables - Modificables
+	var escala_tiempo = 1e-11;
+	
+	function panel_add_display(title, suffix, modif) {
+		var elem = $($('#tpl_display').text().trim());
+
+		elem.find('h3').text(title);
+
+		if (suffix) {
+			elem.find('.suffix span').text(suffix);
+		} else {
+			elem.find('.suffix span').remove();
+		}
+
+		if (!modif) {
+			elem.find('input').attr('disabled', 'disabled');
+		}
+
+		panel.children().append(elem);
+
+		return elem.find('input');
+	}
+
+	function panel_add_boton(title) {
+		var elem = $($('#tpl_display').text().trim());
+
+		elem.find('button').text(title);
+
+		panel.children().append(elem);
+
+		return elem.find('button');
+	}
+
+	function setup() {
+		// DOM
+
+		// DOM - Renderer Container
+		container = $('<div id="container" />');
+		$('body').append(container);
+
+		// DOM - Panel
+		panel = $('#panel');
+		disp_campo = panel_add_display('Campo', 'Coulomb');
+		disp_periodo = panel_add_display('Periodo', 's');
+		disp_n_vueltas = panel_add_display('Num. Vueltas');
+		disp_freq_cicl = panel_add_display('Freq. Ciclotronica', 's^-1');
+		disp_paso = panel_add_display('Paso', 'm');
+
+		disp_tiempo = panel_add_display('Tiempo', 's');
+		disp_vueltas = panel_add_display('Vueltas');
+		disp_altura = panel_add_display('Altura', 'm');
+		
+		function validacion(nombre, elem) {
+			return function () {
+				var nuevo = parseFloat(elem.val());
+				
+				if (isNaN(nuevo)) {
+					elem.blur().val(window[nombre]);
+				} else {
+					elem.val(window[nombre] = nuevo);
+				}
+			};
+		}
+		
+		function disp_mod(nombre, disp) {
+			disp.val(window[nombre]);
+			disp.on('change', validacion(nombre, disp));
+		}
+		
+		disp_fact_t = panel_add_display('Escala Tiempo (modif.)', '1s real = {Valor}s simulado', true);
+		disp_mod('escala_tiempo', disp_fact_t);
+		
+		disp_fact_x = panel_add_display('Escala X (modif.)', '{Valor}px real = 1m simulado', true);
+		disp_mod('X_SCALE', disp_fact_x);
+		
+		disp_fact_y = panel_add_display('Escala Y (modif.)', '{Valor}px real = 1m simulado', true);
+		disp_mod('Y_SCALE', disp_fact_y);
+		
+		disp_fact_z = panel_add_display('Escala Z (modif.)', '{Valor}px real = 1m simulado', true);
+		disp_mod('Z_SCALE', disp_fact_z);
+		
+		disp_radio = panel_add_display('Radio Particula (modif.)', '(sin unidad)', true);
+		disp_radio.val(PARTICLE_RADIUS);
+		disp_radio.on('change', function () {
+			validacion('PARTICLE_RADIUS', disp_radio)();
+
+			if (Detector.webgl) {
+				var nueva = new THREE.Mesh(new THREE.SphereGeometry(PARTICLE_RADIUS, 50, 50), new THREE.MeshLambertMaterial({
+					color: 0x0000ff
+				}));
+
+				nueva.position.copy(particle.position);
+
+				scene.remove(particle);
+				scene.add(nueva);
+
+				particle = nueva;
+			}
+		});
+
+		// Camera
+		// -- La camara proyecta el campo 3D simulado al plano 2D de la pantalla
+		// -- Aqui, 50 es el angulo de vision (field of view)
+		camera = new THREE.PerspectiveCamera(50, window.innerWidth / window.innerHeight, 1, 10000);
+		camera.position.x = camera.position.z = camera.position.y = 300;
+
+		// Scene
+		// Este es el espacio 3D que se mostrara en pantalla
+		scene = new THREE.Scene();
+
+		// Scene - Ejes
+		for (var i = 0; i < 3; ++i) {
+			var vec1 = new THREE.Vector3(), vec2 = new THREE.Vector3();
+			var pos1 = [0, 0, 0], pos2 = [0, 0, 0];
+			pos1[i] = -AXIS_LENGTH;
+			pos2[i] = AXIS_LENGTH;
+			vec1.set.apply(vec1, pos1);
+			vec2.set.apply(vec2, pos2);
+
+			var geometry = new THREE.Geometry();
+			geometry.vertices.push(vec1);
+			geometry.vertices.push(vec2);
+
+			material = new THREE.LineBasicMaterial({ color: [0xFF0000, 0x00FF00, 0x0000FF][i] });
+
+			var mesh = new THREE.Line(geometry, material);
+
+			scene.add(mesh);
+		}
+		
+		// Scene - Particle
+		// cuando esta habilitado WEBGL, que es dibujo rapido en pantalla
+		if (Detector.webgl) {
+			particle = new THREE.Mesh(new THREE.SphereGeometry(PARTICLE_RADIUS, 50, 50), new THREE.MeshLambertMaterial({
+				color: 0x0000ff
+			}));
+			
+		} else { // no esta habilitado.
+			particle = new THREE.Particle(new THREE.ParticleCanvasMaterial({
+				color: 0x000000, program: function (ctx) {
+					ctx.beginPath();
+					ctx.arc(0, 0, PARTICLE_RADIUS, 0, Math.TAU, true);
+					ctx.closePath();
+					ctx.fill();
+				}}));
+		}
+
+		scene.add(particle);
+
+		// Renderer
+		// WebGL -- utiliza la tarjeta de video directamente
+		// Canvas -- dibuja en el plano, sin aceleracion de la tarjeta de video
+		renderer = Detector.webgl ? new THREE.WebGLRenderer() : new THREE.CanvasRenderer();
+		renderer.setSize(window.innerWidth, window.innerHeight);
+
+		container.append(renderer.domElement);
+		$(window).resize(function () {
+			camera.aspect = window.innerWidth / window.innerHeight;
+			camera.updateProjectionMatrix();
+			renderer.setSize(window.innerWidth, window.innerHeight);
+			controls.handleResize();
+		});
+
+		// Controls
+		controls = new THREE.TrackballControls(camera, renderer.domElement);
+
+		// Stats
+		stats = new Stats();
+		stats.domElement.style.position = 'absolute';
+		stats.domElement.style.top = '0px';
+		stats.domElement.style.zIndex = 100;
+		container.append(stats.domElement);
+	}
+
+	function calculos() {
+		var CL = CALCULO;
+
+		CL.alpha = CL.angulo * Math.PI / 180;
+		CL.campo = (CL.masa * CL.velocidad * Math.sin(CL.alpha)) / (CL.carga * CL.radio);
+		CL.periodo = (Math.TAU * CL.masa) / (CL.carga * CL.campo);
+		CL.n_vueltas = CL.tiempo / CL.periodo;
+		CL.freq_cicl = CL.n_vueltas / CL.tiempo;
+		CL.paso = CL.velocidad * Math.cos(CL.alpha) * CL.periodo;
+		CL.vel_y = CL.paso / CL.periodo;
+		CL.w = Math.TAU / CL.periodo;
+
+		disp_campo.val(CL.campo);
+		disp_periodo.val(CL.periodo);
+		disp_n_vueltas.val(CL.n_vueltas);
+		disp_freq_cicl.val(CL.freq_cicl);
+		disp_paso.val(CL.paso);
+	}
+
+	var time = 0;
+	var last_anim_time = 0;
+
+	function animate() {
+		var anim_time = (new Date).getTime();
+
+		if (!last_anim_time) {
+			last_anim_time = anim_time;
+		}
+
+		time += (anim_time - last_anim_time) * escala_tiempo;
+		
+		particle.position.x = Math.cos(CALCULO.w * time) * CALCULO.radio * X_SCALE;
+		particle.position.z = Math.sin(CALCULO.w * time) * CALCULO.radio * Z_SCALE;
+		particle.position.y = CALCULO.vel_y * time * Y_SCALE;
+
+		disp_tiempo.val(time.toFixed(15));
+		disp_vueltas.val(time / CALCULO.periodo);
+		disp_altura.val(time * CALCULO.vel_y);
+
+		last_anim_time = anim_time;
+	}
+
+	function loop(time) {
+		// hacemos que el objeto de control de mouse mande su informacion a la camara
+		controls.update();
+		// realizamos nuestras animaciones para este lapso de tiempo
+		animate();
+		// hacemos que el renderer dibuje en la pantala
+		renderer.render(scene, camera);
+		// actualizamos el contador de FPS
+		stats.update();
+		// pedimos al navegador que corra nuestro ciclo cuando este listo para dibujar de nuevo
+		requestAnimationFrame(loop);
+	}
+
+	// MAIN
+	$(function () {
+		// Inicializamos el ambiente
+		setup();
+
+		// Realizamos los calculos (fisica (: )
+		calculos();
+
+		// Iniciamos el ciclo de animacion
+		loop();
+	});
+</script>
